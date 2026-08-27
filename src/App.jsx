@@ -257,6 +257,47 @@ export default function POSViande() {
   const ventesVisibles = estPDG ? ventes : ventes.filter((v) => v.vendeur_id === session?.user.id);
   const totalJour = ventesVisibles.reduce((s, v) => s + Number(v.total), 0);
 
+  // ---------- Vue par défaut selon le rôle ----------
+  useEffect(() => {
+    if (profil) setVue(profil.role === "pdg" ? "tableau" : "vente");
+  }, [profil]);
+
+  // ---------- Données du tableau de bord (PDG) ----------
+  const estAujourdhui = (dateStr) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    );
+  };
+
+  const ventesAujourdhui = ventes.filter((v) => estAujourdhui(v.created_at));
+  const totalAujourdhui = ventesAujourdhui.reduce((s, v) => s + Number(v.total), 0);
+
+  const ventesParVendeur = useMemo(() => {
+    const map = {};
+    ventesAujourdhui.forEach((v) => {
+      const nom = v.profiles?.nom_complet || "—";
+      if (!map[nom]) map[nom] = { nom, total: 0, count: 0 };
+      map[nom].total += Number(v.total);
+      map[nom].count += 1;
+    });
+    return Object.values(map).sort((a, b) => b.total - a.total);
+  }, [ventesAujourdhui]);
+
+  const ventesParMode = useMemo(() => {
+    const map = {};
+    ventesAujourdhui.forEach((v) => {
+      map[v.mode_paiement] = (map[v.mode_paiement] || 0) + Number(v.total);
+    });
+    return map;
+  }, [ventesAujourdhui]);
+
+  const produitsStockBas = produits.filter((p) => p.stock <= 1).sort((a, b) => a.stock - b.stock);
+  const valeurStockTotal = produits.reduce((s, p) => s + p.stock * p.prix_caisse, 0);
+
   // ---------- Écran de chargement ----------
   if (chargement) {
     return <div style={styles.centre}>Chargement…</div>;
@@ -281,15 +322,16 @@ export default function POSViande() {
           </div>
         </div>
         <nav style={styles.nav}>
-          {["vente", "historique"]
-            .concat(estPDG ? ["stock", "utilisateurs"] : [])
+          {(estPDG ? ["tableau", "vente", "historique", "stock", "utilisateurs"] : ["vente", "historique"])
             .map((v) => (
               <button
                 key={v}
                 onClick={() => setVue(v)}
                 style={{ ...styles.navBtn, ...(vue === v ? styles.navBtnActif : {}) }}
               >
-                {v === "vente"
+                {v === "tableau"
+                  ? "Tableau de bord"
+                  : v === "vente"
                   ? "Vente"
                   : v === "stock"
                   ? "Stock"
@@ -303,6 +345,77 @@ export default function POSViande() {
           </button>
         </nav>
       </header>
+
+      {vue === "tableau" && estPDG && (
+        <div style={styles.panneauStock}>
+          <div style={styles.stockHeader}>
+            <div style={styles.panierTitre}>Tableau de bord — Aujourd'hui</div>
+          </div>
+
+          <div style={styles.cartesKPI}>
+            <div style={styles.carteKPI}>
+              <div style={styles.kpiLabel}>Ventes du jour</div>
+              <div style={styles.kpiValeur}>{fmt(totalAujourdhui)} HTG</div>
+              <div style={styles.kpiSousTexte}>{ventesAujourdhui.length} transaction(s)</div>
+            </div>
+            <div style={styles.carteKPI}>
+              <div style={styles.kpiLabel}>Valeur du stock</div>
+              <div style={styles.kpiValeur}>{fmt(valeurStockTotal)} HTG</div>
+              <div style={styles.kpiSousTexte}>{produits.length} produit(s)</div>
+            </div>
+            <div style={styles.carteKPI}>
+              <div style={styles.kpiLabel}>Alertes stock bas</div>
+              <div style={{ ...styles.kpiValeur, color: produitsStockBas.length ? "#B3261E" : "#1A1A1A" }}>
+                {produitsStockBas.length}
+              </div>
+              <div style={styles.kpiSousTexte}>≤ 1 caisse restante</div>
+            </div>
+          </div>
+
+          <div style={styles.grilleTableau}>
+            <div style={styles.blocTableau}>
+              <div style={styles.blocTitre}>Ventes par vendeur (aujourd'hui)</div>
+              {ventesParVendeur.length === 0 && (
+                <div style={styles.panierVide}>Aucune vente aujourd'hui</div>
+              )}
+              {ventesParVendeur.map((v) => (
+                <div key={v.nom} style={styles.ligneBloc}>
+                  <span>{v.nom}</span>
+                  <span>
+                    {fmt(v.total)} HTG ({v.count})
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div style={styles.blocTableau}>
+              <div style={styles.blocTitre}>Ventes par mode de paiement</div>
+              {Object.keys(ventesParMode).length === 0 && (
+                <div style={styles.panierVide}>Aucune vente aujourd'hui</div>
+              )}
+              {Object.entries(ventesParMode).map(([mode, total]) => (
+                <div key={mode} style={styles.ligneBloc}>
+                  <span>{mode}</span>
+                  <span>{fmt(total)} HTG</span>
+                </div>
+              ))}
+            </div>
+
+            <div style={styles.blocTableau}>
+              <div style={styles.blocTitre}>Produits à réapprovisionner</div>
+              {produitsStockBas.length === 0 && (
+                <div style={styles.panierVide}>Tous les stocks sont suffisants</div>
+              )}
+              {produitsStockBas.map((p) => (
+                <div key={p.id} style={styles.ligneBloc}>
+                  <span>{p.nom}</span>
+                  <span style={{ color: "#B3261E", fontWeight: 700 }}>{fmt(p.stock)} caisse(s)</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {vue === "vente" && (
         <div style={styles.grilleVente}>
@@ -620,11 +733,14 @@ export default function POSViande() {
   );
 }
 
-// ---------- Écran de connexion / inscription ----------
+// ---------- Écran de connexion : sélection d'utilisateur ----------
+const UTILISATEURS = [
+  { nom: "Bwb", email: "pdg@spc.com" },
+  { nom: "Wadeline", email: "wadeline@spc.com" },
+];
+
 function EcranConnexion() {
-  const [mode, setMode] = useState("connexion"); // connexion | inscription
-  const [nomComplet, setNomComplet] = useState("");
-  const [email, setEmail] = useState("");
+  const [utilisateurChoisi, setUtilisateurChoisi] = useState(null);
   const [motDePasse, setMotDePasse] = useState("");
   const [erreur, setErreur] = useState("");
   const [enTraitement, setEnTraitement] = useState(false);
@@ -633,71 +749,54 @@ function EcranConnexion() {
     e.preventDefault();
     setErreur("");
     setEnTraitement(true);
-    if (mode === "connexion") {
-      const { error } = await supabase.auth.signInWithPassword({ email, password: motDePasse });
-      if (error) setErreur("Identifiants incorrects.");
-    } else {
-      if (!nomComplet.trim()) {
-        setErreur("Entre le nom complet.");
-        setEnTraitement(false);
-        return;
-      }
-      const { error } = await supabase.auth.signUp({
-        email,
-        password: motDePasse,
-        options: { data: { nom_complet: nomComplet } },
-      });
-      if (error) setErreur(error.message);
-    }
+    const { error } = await supabase.auth.signInWithPassword({
+      email: utilisateurChoisi.email,
+      password: motDePasse,
+    });
+    if (error) setErreur("Mot de passe incorrect.");
     setEnTraitement(false);
+  }
+
+  if (!utilisateurChoisi) {
+    return (
+      <div style={styles.centre}>
+        <div style={styles.formConnexion}>
+          <div style={styles.titreConnexion}>POS — Vente de viande</div>
+          <div style={styles.label}>Qui êtes-vous ?</div>
+          <div style={styles.pickerListe}>
+            {UTILISATEURS.map((u) => (
+              <button
+                key={u.email}
+                type="button"
+                style={styles.btnUtilisateur}
+                onClick={() => {
+                  setErreur("");
+                  setMotDePasse("");
+                  setUtilisateurChoisi(u);
+                }}
+              >
+                {u.nom}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div style={styles.centre}>
       <form onSubmit={soumettre} style={styles.formConnexion}>
         <div style={styles.titreConnexion}>POS — Vente de viande</div>
-        <div style={styles.modeRow}>
-          <button
-            type="button"
-            style={{ ...styles.btnMode, ...(mode === "connexion" ? styles.btnModeActif : {}) }}
-            onClick={() => setMode("connexion")}
-          >
-            Connexion
-          </button>
-          <button
-            type="button"
-            style={{ ...styles.btnMode, ...(mode === "inscription" ? styles.btnModeActif : {}) }}
-            onClick={() => setMode("inscription")}
-          >
-            Créer un compte
-          </button>
-        </div>
-
-        {mode === "inscription" && (
-          <div style={styles.champGroupe}>
-            <label style={styles.label}>Nom complet</label>
-            <input
-              style={styles.inputModal}
-              value={nomComplet}
-              onChange={(e) => setNomComplet(e.target.value)}
-              placeholder="Wadeline Louimeus"
-            />
-          </div>
-        )}
         <div style={styles.champGroupe}>
-          <label style={styles.label}>Email</label>
-          <input
-            type="email"
-            style={styles.inputModal}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="nom@exemple.com"
-          />
+          <label style={styles.label}>Utilisateur</label>
+          <div style={styles.utilisateurChoisiTxt}>{utilisateurChoisi.nom}</div>
         </div>
         <div style={styles.champGroupe}>
           <label style={styles.label}>Mot de passe</label>
           <input
             type="password"
+            autoFocus
             style={styles.inputModal}
             value={motDePasse}
             onChange={(e) => setMotDePasse(e.target.value)}
@@ -705,15 +804,18 @@ function EcranConnexion() {
           />
         </div>
         {erreur && <div style={styles.erreurTxt}>{erreur}</div>}
-        <button type="submit" style={styles.btnEncaisser} disabled={enTraitement}>
-          {enTraitement ? "…" : mode === "connexion" ? "Se connecter" : "Créer le compte"}
-        </button>
-        {mode === "inscription" && (
-          <div style={styles.noteUtilisateurs}>
-            Les nouveaux comptes reçoivent le rôle "Vendeur(se)" par défaut. Le PDG peut ensuite
-            changer le rôle depuis l'onglet Utilisateurs.
-          </div>
-        )}
+        <div style={styles.modalBtns}>
+          <button
+            type="button"
+            style={styles.btnVider}
+            onClick={() => setUtilisateurChoisi(null)}
+          >
+            Retour
+          </button>
+          <button type="submit" style={styles.btnEncaisser} disabled={enTraitement}>
+            {enTraitement ? "…" : "Se connecter"}
+          </button>
+        </div>
       </form>
     </div>
   );
@@ -774,6 +876,15 @@ const styles = {
   td: { padding: 6, border: "1px solid #ccc" },
   inputTable: { width: "100%", border: "1px solid #ccc", borderRadius: 0, padding: 6, fontSize: 13, boxSizing: "border-box" },
   noteUtilisateurs: { fontSize: 12, color: "#666", marginTop: 12 },
+  cartesKPI: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 20 },
+  carteKPI: { background: "#fff", border: "1px solid #000", padding: 16 },
+  kpiLabel: { fontSize: 12, color: "#666", marginBottom: 6 },
+  kpiValeur: { fontSize: 22, fontWeight: 700 },
+  kpiSousTexte: { fontSize: 11, color: "#888", marginTop: 4 },
+  grilleTableau: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 },
+  blocTableau: { background: "#fff", border: "1px solid #000", padding: 16 },
+  blocTitre: { fontSize: 14, fontWeight: 700, marginBottom: 10 },
+  ligneBloc: { display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid #eee" },
 
   totalJourTxt: { fontSize: 13 },
   carteVente: { background: "#fff", border: "1px solid #000", padding: 12, marginBottom: 8 },
@@ -795,6 +906,9 @@ const styles = {
   monnaieTxt: { fontSize: 13, marginTop: 8, fontWeight: 600 },
   modalBtns: { display: "flex", gap: 8 },
   erreurTxt: { fontSize: 12, color: "#B3261E", marginBottom: 12 },
+  pickerListe: { display: "flex", flexDirection: "column", gap: 8, marginTop: 12 },
+  btnUtilisateur: { padding: "14px 0", background: "#fff", border: "1px solid #000", borderRadius: 0, cursor: "pointer", fontSize: 15, fontWeight: 700 },
+  utilisateurChoisiTxt: { fontSize: 15, fontWeight: 700, padding: "8px 0" },
 
   recuDate: { fontSize: 12, color: "#666", marginBottom: 12 },
   recuLignes: { borderTop: "1px solid #ccc", borderBottom: "1px solid #ccc", padding: "8px 0", marginBottom: 8, display: "flex", flexDirection: "column", gap: 4 },
