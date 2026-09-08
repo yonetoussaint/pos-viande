@@ -33,39 +33,59 @@ export default function Terminal({
     fitAddon.fit();
     term.focus();
 
-    const params = new URLSearchParams({ codespace: codespaceName });
-    if (authToken) params.set("token", authToken);
-    const ws = new WebSocket(`${gatewayUrl}/api/terminal?${params}`);
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempt = 0;
+    let intentionallyClosed = false;
 
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows })
-      );
+    const connect = () => {
+      const params = new URLSearchParams({ codespace: codespaceName });
+      if (authToken) params.set("token", authToken);
+      ws = new WebSocket(`${gatewayUrl}/api/terminal?${params}`);
+
+      ws.onopen = () => {
+        reconnectAttempt = 0;
+        ws?.send(
+          JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows })
+        );
+      };
+
+      ws.onmessage = async (event) => {
+        const text =
+          typeof event.data === "string"
+            ? event.data
+            : await event.data.text();
+        term.write(text);
+      };
+
+      ws.onerror = () => {
+        term.write("\r\n\x1b[31mTerminal connection error\x1b[0m\r\n");
+      };
+
+      ws.onclose = () => {
+        if (intentionallyClosed) return;
+        term.write(
+          "\r\n\x1b[33mDisconnected — reattaching shortly...\x1b[0m\r\n"
+        );
+        // The shell itself keeps running in tmux on the codespace, so
+        // reconnecting reattaches to the same session instead of losing it.
+        const delay = Math.min(1000 * 2 ** reconnectAttempt, 15000);
+        reconnectAttempt += 1;
+        reconnectTimer = setTimeout(connect, delay);
+      };
     };
 
-    ws.onmessage = async (event) => {
-      const text =
-        typeof event.data === "string" ? event.data : await event.data.text();
-      term.write(text);
-    };
-
-    ws.onerror = () => {
-      term.write("\r\n\x1b[31mTerminal connection error\x1b[0m\r\n");
-    };
-
-    ws.onclose = () => {
-      term.write("\r\n\x1b[33mTerminal disconnected\x1b[0m\r\n");
-    };
+    connect();
 
     const dataDisposable = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "input", data }));
       }
     });
 
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws?.readyState === WebSocket.OPEN) {
         ws.send(
           JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows })
         );
@@ -73,10 +93,28 @@ export default function Terminal({
     });
     resizeObserver.observe(containerRef.current);
 
+    // Reconnect right away when the tab comes back to the foreground,
+    // instead of waiting out the backoff timer.
+    const handleVisibility = () => {
+      if (
+        document.visibilityState === "visible" &&
+        ws?.readyState !== WebSocket.OPEN &&
+        ws?.readyState !== WebSocket.CONNECTING
+      ) {
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectAttempt = 0;
+        connect();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
     return () => {
+      intentionallyClosed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      document.removeEventListener("visibilitychange", handleVisibility);
       dataDisposable.dispose();
       resizeObserver.disconnect();
-      ws.close();
+      ws?.close();
       term.dispose();
     };
   }, [codespaceName, gatewayUrl, authToken]);
