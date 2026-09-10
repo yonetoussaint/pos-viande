@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Terminal from "./Terminal";
+import TerminalManager from "./TerminalManager";
 
 interface Codespace {
   name: string;
@@ -39,7 +39,7 @@ export default function CodespacePicker({
 
   if (selected) {
     return (
-      <Terminal
+      <TerminalManager
         codespaceName={selected}
         gatewayUrl={gatewayUrl}
         authToken={authToken}
